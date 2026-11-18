@@ -1,0 +1,10 @@
+node_modules/
+dist/
+resolva.sqlite
+*.sqlite
+.env
+
+.env.*
+!.env.example
+node_modules
+dist
