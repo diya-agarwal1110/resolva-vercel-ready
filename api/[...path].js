@@ -138,8 +138,11 @@ module.exports = async (req, res) => {
   try {
     await init();
     const p = db();
-    const route = '/' + (Array.isArray(req.query.path) ? req.query.path.join('/') : (req.query.path || ''));
-    if (req.method === 'GET' && route === '/health') {
+    const url = new URL(req.url, `https://${req.headers.host || 'localhost'}`);
+const route = url.pathname
+  .replace(/^\/api(?=\/|$)/, '')
+  .replace(/\/$/, '') || '/';
+   if (req.method === 'GET' && route === '/health') {
       await p.query('SELECT 1');
       return send(res,200,{ok:true,database:'PostgreSQL',provider:'Vercel Postgres / Neon'});
     }
