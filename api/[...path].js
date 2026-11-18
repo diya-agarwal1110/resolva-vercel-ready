@@ -27,35 +27,99 @@ const seed = [
  {id:'INC-1041',title:'Water leakage – Room 204',category:'Water / Leakage',location:'Room 204',description:'Leakage near ceiling and wall.',student:'Diya Agarwal',studentId:'STU1025',affected:12,duration:5,safety:60,locationImportance:70,frequency:90,status:'In Progress',assignedDepartment:'Plumbing / Civil',assignedStaff:'Suresh Yadav',evidence:[],created:'Yesterday, 2:15 PM',reports:8,verification:null},
  {id:'INC-1040',title:'Electrical leakage near corridor',category:'Electricity',location:'Block A Corridor',description:'Sparking noticed near switchboard.',student:'Gauri Gupta',studentId:'STU1026',affected:30,duration:1,safety:100,locationImportance:90,frequency:70,status:'Resolved',assignedDepartment:'Electrical Maintenance',assignedStaff:'Amit Kumar',evidence:[],created:'Yesterday, 9:20 AM',reports:3,verification:null}
 ];
+
 let initialized;
+
 async function init() {
-  if (!initialized) initialized = (async () => {
-    const p = db();
-    await p.query(`CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
-      role TEXT NOT NULL, salt TEXT NOT NULL, password_hash TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`);
-    await p.query(`CREATE TABLE IF NOT EXISTS incidents (
-      id TEXT PRIMARY KEY, data JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`);
-    await p.query(`CREATE TABLE IF NOT EXISTS sessions (
-      token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      role TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL
-    )`);
-    for (const u of demoUsers) {
-      const salt = crypto.randomBytes(16).toString('hex');
-      await p.query(`INSERT INTO users(id,name,email,role,salt,password_hash)
-        VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(email) DO NOTHING`,
-        [u.id,u.name,u.email,u.role,salt,hash(u.password,salt)]);
-    }
-    for (const item of seed) {
-      await p.query('INSERT INTO incidents(id,data) VALUES($1,$2::jsonb) ON CONFLICT(id) DO NOTHING',
-        [item.id,JSON.stringify(item)]);
-    }
-  })();
-  return initialized;
+  if (!initialized) {
+    initialized = (async () => {
+      const client = await db().connect();
+
+      try {
+        await client.query('BEGIN');
+
+        // Prevent simultaneous database initialization
+        await client.query(
+          'SELECT pg_advisory_xact_lock(731942, 1)'
+        );
+
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            role TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS incidents (
+            id TEXT PRIMARY KEY,
+            data JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id)
+              ON DELETE CASCADE,
+            role TEXT NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL
+          )
+        `);
+
+        for (const u of demoUsers) {
+          const salt = crypto.randomBytes(16).toString('hex');
+
+          await client.query(
+            `INSERT INTO users
+            (id,name,email,role,salt,password_hash)
+            VALUES($1,$2,$3,$4,$5,$6)
+            ON CONFLICT(email) DO NOTHING`,
+            [
+              u.id,
+              u.name,
+              u.email,
+              u.role,
+              salt,
+              hash(u.password, salt)
+            ]
+          );
+        }
+
+        for (const item of seed) {
+          await client.query(
+            `INSERT INTO incidents(id,data)
+             VALUES($1,$2::jsonb)
+             ON CONFLICT(id) DO NOTHING`,
+            [item.id, JSON.stringify(item)]
+          );
+        }
+
+        await client.query('COMMIT');
+
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    })();
+  }
+
+  try {
+    await initialized;
+  } catch (error) {
+    initialized = null;
+    throw error;
+  }
 }
+
 function send(res, status, body) { return res.status(status).json(body); }
 async function createSession(p, user) {
   const token = crypto.randomBytes(32).toString('hex');
